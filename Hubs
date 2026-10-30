@@ -1,0 +1,780 @@
+-- DANIEL'S MM2 HUB + LIVE CLOCK (DYNAMIC FIXED VERSION WITH SNIFFED CANDY ENGINE, NO-CLIP COIN FARM & NOTIFICATION SYSTEMS)
+-- Centered Blue Theme Layout with Advanced Aimlock, Custom Gold Candy ESP, and No-Clip Fly Farm Controls
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- Re-allocating full matrix variables to exactly match classic settings
+_G.PlayerESP_Enabled = false 
+_G.MM2_ESP_Enabled = false   
+_G.AutoGrabGun = false
+_G.GunESP_Enabled = false
+_G.Aimlock_Active = false 
+_G.OnlyAimAsSheriff = false     
+_G.TpButton_Draggable = false
+_G.AimButton_Draggable = false 
+_G.CoinFarm_Enabled = false
+_G.ResetWhenFull_Enabled = false 
+_G.AutoLeave_Enabled = false   
+_G.AutoBuy_Enabled = false      
+_G.CoinFarm_Speed = 24 
+_G.FOV_Radius = 150 
+_G.WalkSpeed_Value = 16
+
+-- Global position anchor storage to guarantee return safety
+_G.MemoryCFrame = nil
+
+-- Internal Currency State Listeners hooking your precise network schema table formats
+local trackedCollectedAmount = 0
+local coinsStartedRemote = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Gameplay") and ReplicatedStorage.Remotes.Gameplay:FindFirstChild("CoinsStarted")
+
+if coinsStartedRemote and (coinsStartedRemote:IsA("RemoteEvent") or coinsStartedRemote:IsA("BindableEvent")) then
+    coinsStartedRemote.OnClientEvent:Connect(function(data)
+        if data and type(data) == "table" then
+            if data.Candy and data.Candy.CollectedAmount then
+                trackedCollectedAmount = tonumber(data.Candy.CollectedAmount) or 0
+            elseif data.Coin and data.Coin.CollectedAmount then
+                trackedCollectedAmount = tonumber(data.Coin.CollectedAmount) or 0
+            end
+        end
+    end)
+end
+
+-- Classic FOV Color Cycling System Array List
+local fovColorList = {
+    Color3.fromRGB(0, 150, 255),   -- 1. Ice Blue (Default)
+    Color3.fromRGB(255, 0, 150),   -- 2. Neon Pink
+    Color3.fromRGB(240, 200, 0),   -- 3. Radiant Yellow
+    Color3.fromRGB(0, 255, 150)    -- 4. Emerald Green
+}
+local fovColorNames = {"Ice Blue", "Neon Pink", "Yellow", "Emerald"}
+local currentFovColorIndex = 1
+
+-- Safely clear out existing caches across all potential storage contexts to avoid duplication conflicts
+for _, name in ipairs({"Daniel’s script", "DeltaMM2Menu", "DeltaTimeGui", "DevToolkitGUI", "MM2DraggableTP", "MM2DraggableAIM", "MM2GunNotification"}) do
+    local oldCore = CoreGui:FindFirstChild(name)
+    if oldCore then oldCore:Destroy() end
+    local oldPlayer = LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild(name)
+    if oldPlayer then oldPlayer:Destroy() end
+end
+
+-- Find dropped gun model instance paths
+local function locateGunDrop()
+    local gun = Workspace:FindFirstChild("GunDrop")
+    if gun then return gun end
+    for _, v in ipairs(Workspace:GetChildren()) do
+        if v:IsA("Folder") or v:IsA("Model") then
+            local mapGun = v:FindFirstChild("GunDrop", true)
+            if mapGun then return mapGun end
+        end
+    end
+    return nil
+end
+
+-- Verify active round state values safely
+local function isCharacterInActiveArena()
+    local mainGui = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("MainGui")
+    if mainGui and mainGui:FindFirstChild("Game") and mainGui.Game:FindFirstChild("RoundHint") then
+        local roundText = mainGui.Game.RoundHint.Text
+        if roundText:match("Lobby") or roundText:match("Intermission") or roundText:match("Voting") or roundText == "" then
+            return false
+        end
+        return true 
+    end
+    return true
+end
+
+-- Check if LocalPlayer is holding or carrying the Sheriff weapon blueprint items
+local function isLocalPlayerSheriff()
+    local char = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    local hasGunItem = (backpack and backpack:FindFirstChild("Gun")) or (char and char:FindFirstChild("Gun"))
+    if hasGunItem then return true end
+    return false
+end
+
+-- Dynamic candy and coin scanner framework update
+local function getClosestCoin()
+    local closestCoin = nil
+    local shortestDistance = math.huge
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    
+    if root then
+        for _, v in ipairs(Workspace:GetDescendants()) do
+            if v:IsA("TouchTransmitter") and v.Parent and v.Parent:IsA("BasePart") then
+                local item = v.Parent
+                local pName = string.lower(item.Name)
+                
+                if string.find(pName, "coin") or string.find(pName, "candy") or string.find(pName, "sweet") or string.find(pName, "token") or item:FindFirstChild("CoinVisual") then
+                    local distance = (item.Position - root.Position).Magnitude
+                    if distance < shortestDistance then
+                        shortestDistance = distance
+                        closestCoin = item
+                    end
+                end
+            end
+        end
+    end
+    return closestCoin
+end
+
+-- Pinpoint active Murderer character vectors
+local function getMurdererCharacter()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local char = player.Character
+            local backpack = player:FindFirstChild("Backpack")
+            local hasKnife = (backpack and backpack:FindFirstChild("Knife")) or char:FindFirstChild("Knife")
+            
+            if hasKnife and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChildOfClass("Humanoid").Health > 0 then
+                return char
+            end
+        end
+    end
+    return nil
+end
+
+-- Universal capacity sniffer
+local function isCoinBagFull()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    local mainGui = playerGui and playerGui:FindFirstChild("MainGui")
+    local gameUi = mainGui and mainGui:FindFirstChild("Game")
+    
+    if gameUi then
+        for _, uiElement in ipairs(gameUi:GetDescendants()) do
+            if uiElement:IsA("TextLabel") then
+                local current, max = uiElement.Text:match("(%d+)%s*/%s*(%--%d+)")
+                if current and max then
+                    local currentCount = tonumber(current)
+                    local maxCapacity = tonumber(max)
+                    if currentCount and maxCapacity and currentCount >= maxCapacity then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    if trackedCollectedAmount >= 40 then
+        return true
+    end
+
+    local candyAttribute = LocalPlayer:GetAttribute("Candies") or LocalPlayer:GetAttribute("Candy") or LocalPlayer:GetAttribute("Coins") or LocalPlayer:GetAttribute("Coin")
+    if candyAttribute and type(candyAttribute) == "number" and candyAttribute >= 40 then
+        return true
+    end
+
+    return false
+end
+
+-- UNIFIED STABILIZED TWO-WAY TELEPORTATION ENGINE WITH EXPERT GLOBAL HARD MEMORY ANCHOR
+local function teleportToGun()
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local gunDrop = locateGunDrop()
+    
+    if character and root and gunDrop then
+        -- 1. Lock original coordinates straight into global memory matrix to avoid touch interference [INDEX]
+        _G.MemoryCFrame = root.CFrame
+        
+        -- 2. Clean out physics velocities before execution to guarantee no drifting
+        root.Velocity = Vector3.new(0, 0, 0)
+        root.RotVelocity = Vector3.new(0, 0, 0)
+        
+        -- 3. Flash to the gun item position safely
+        root.CFrame = gunDrop:GetPivot() * CFrame.new(0, 1.5, 0)
+        
+        -- 4. Safe touch buffer window registration frame
+        task.wait(0.2) 
+        
+        -- 5. Force physics to complete zero once again
+        root.Velocity = Vector3.new(0, 0, 0)
+        root.RotVelocity = Vector3.new(0, 0, 0)
+        
+        -- 6. Recall global memory state directly, hard anchor character to enforce the spot [INDEX]
+        root.CFrame = _G.MemoryCFrame
+        root.Anchored = true
+        
+        -- 7. Keep layout completely frozen for a tiny step to fully force engine synchronization [INDEX]
+        task.wait(0.15)
+        root.Anchored = false
+        _G.MemoryCFrame = nil -- Clear cache
+    else
+        warn("Gun drop not found.")
+    end
+end
+
+-- Role ESP
+local function applyESP(player)
+    local function setupHighlight(char)
+        task.wait(1)
+        if not char or not char.Parent then return end
+        local old = char:FindFirstChild("RoleESP")
+        if old then old:Destroy() end
+
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "RoleESP"
+        highlight.Parent = char
+        highlight.FillTransparency = 0.5
+        highlight.OutlineTransparency = 0
+        highlight.Enabled = _G.PlayerESP_Enabled
+
+        task.spawn(function()
+            while char.Parent and highlight.Parent do
+                highlight.Enabled = _G.PlayerESP_Enabled
+                if _G.PlayerESP_Enabled then
+                    local backpack = player:FindFirstChild("Backpack")
+                    local hasKnife = (backpack and backpack:FindFirstChild("Knife")) or char:FindFirstChild("Knife")
+                    local hasGun = (backpack and backpack:FindFirstChild("Gun")) or char:FindFirstChild("Gun")
+
+                    if hasKnife then
+                        highlight.FillColor = Color3.fromRGB(255, 0, 0)
+                    elseif hasGun then
+                        highlight.FillColor = Color3.fromRGB(0, 0, 255)
+                    else
+highlight.FillColor = Color3.fromRGB(0, 255, 0)
+end
+end
+task.wait(1)
+end
+end)
+end
+if player.Character then task.spawn(setupHighlight, player.Character) end
+player.CharacterAdded:Connect(setupHighlight)
+end
+for _, player in ipairs(Players:GetPlayers()) do applyESP(player) end
+Players.PlayerAdded:Connect(applyESP)
+local function updateAllESPHighlights()
+for _, player in ipairs(Players:GetPlayers()) do
+local char = player.Character
+local highlight = char and char:FindFirstChild("RoleESP")
+if highlight then highlight.Enabled = _G.PlayerESP_Enabled end
+end
+end
+-- ScreenGui Setup
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "Daniel’s script"
+ScreenGui.ResetOnSpawn = false
+local uiParent = nil
+local coreGuiSuccess, coreGuiResult = pcall(function() return CoreGui end)
+if coreGuiSuccess and coreGuiResult and not UserInputService:GetFocusedTextBox() then
+local checkTest = Instance.new("Frame")
+local testSuccess = pcall(function() checkTest.Parent = coreGuiResult end)
+checkTest:Destroy()
+if testSuccess then uiParent = coreGuiResult end
+end
+if not uiParent then uiParent = LocalPlayer:WaitForChild("PlayerGui") end
+ScreenGui.Parent = uiParent
+-- Drop Gun Tracking ESP System
+local activeCandyHighlights = {}
+task.spawn(function()
+while task.wait(0.3) do
+local gunDrop = locateGunDrop()
+if gunDrop then
+local gunHighlight = gunDrop:FindFirstChild("GunHighlight")
+if _G.GunESP_Enabled then
+if not gunHighlight then
+gunHighlight = Instance.new("Highlight")
+gunHighlight.Name = "GunHighlight"
+gunHighlight.FillColor = Color3.fromRGB(240, 240, 0)
+gunHighlight.FillTransparency = 0.2
+gunHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+gunHighlight.Parent = gunDrop
+end
+elseif gunHighlight then gunHighlight:Destroy() end
+end
+if _G.MM2_ESP_Enabled then
+local currentPass = {}
+for _, obj in ipairs(Workspace:GetDescendants()) do
+local name = string.lower(obj.Name)
+if (string.find(name, "candy") or string.find(name, "coin") or string.find(name, "sweet")) and (obj:IsA("BasePart") or obj:IsA("Model")) then
+currentPass[obj] = true
+if not activeCandyHighlights[obj] then
+local hl = Instance.new("Highlight")
+hl.Name = "CandyHighlight"
+hl.FillColor = Color3.fromRGB(255, 198, 0)
+hl.FillTransparency = 0.4
+hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+hl.Adornee = obj
+hl.Parent = ScreenGui
+activeCandyHighlights[obj] = hl
+end
+end
+end
+for oldObj, hl in pairs(activeCandyHighlights) do
+if not currentPass[oldObj] then if hl then hl:Destroy() end activeCandyHighlights[oldObj] = nil end
+end
+else
+for obj, hl in pairs(activeCandyHighlights) do if hl then hl:Destroy() end end
+table.clear(activeCandyHighlights)
+end
+end
+end)
+-- Screen-Center Visual Ring
+local FOVCircleFrame = Instance.new("Frame")
+FOVCircleFrame.Name = "FOVCircleFrame"
+FOVCircleFrame.Size = UDim2.new(0, _G.FOV_Radius * 2, 0, _G.FOV_Radius * 2)
+FOVCircleFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+FOVCircleFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+FOVCircleFrame.BackgroundTransparency = 1
+FOVCircleFrame.Visible = false
+FOVCircleFrame.Parent = ScreenGui
+local CircleCorner = Instance.new("UICorner")
+CircleCorner.CornerRadius = UDim.new(1, 0)
+CircleCorner.Parent = FOVCircleFrame
+local CircleStroke = Instance.new("UIStroke")
+CircleStroke.Thickness = 3.0
+CircleStroke.Color = fovColorList[currentFovColorIndex]
+CircleStroke.Transparency = 0.35
+CircleStroke.Parent = FOVCircleFrame
+-- Gun Notifications Panel
+local notifyPanel = Instance.new("Frame")
+notifyPanel.Name = "GunNotification"
+notifyPanel.Size = UDim2.new(0, 180, 0, 80)
+notifyPanel.Position = UDim2.new(1, -210, 1, -260)
+notifyPanel.BackgroundColor3 = Color3.fromRGB(15, 25, 50)
+notifyPanel.BackgroundTransparency = 0.15
+notifyPanel.Visible = false
+notifyPanel.Parent = ScreenGui
+local notifyCorner = Instance.new("UICorner")
+notifyCorner.CornerRadius = UDim.new(0, 8)
+notifyCorner.Parent = notifyPanel
+local notifyStroke = Instance.new("UIStroke")
+notifyStroke.Color = Color3.fromRGB(255, 198, 0)
+notifyStroke.Thickness = 1.5
+notifyStroke.Parent = notifyPanel
+local notifyText = Instance.new("TextLabel")
+notifyText.Size = UDim2.new(1, -20, 1, -10)
+notifyText.Position = UDim2.new(0, 10, 0, 5)
+notifyText.BackgroundTransparency = 1
+notifyText.Text = "GUN DROPPED\n-- studs away\nYOU CAN PICK IT UP"
+notifyText.TextColor3 = Color3.new(1, 1, 1)
+notifyText.TextSize = 13
+notifyText.Font = Enum.Font.GothamBold
+notifyText.LineHeight = 1.3
+notifyText.Parent = notifyPanel
+-- ====================================================================
+-- FANTNAME HUB INTERFACE LAYOUT CONFIGURATION
+-- ====================================================================
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 360, 0, 350)
+mainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+mainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(40, 20, 65)
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = ScreenGui
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = mainFrame
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(0, 180, 0, 40)
+title.Position = UDim2.new(0, 15, 0, 5)
+title.BackgroundTransparency = 1
+title.Text = "FANTNAME Hub🍬"
+title.TextColor3 = Color3.new(1, 1, 1)
+title.TextSize = 16
+title.Font = Enum.Font.GothamBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = mainFrame
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 30, 0, 30)
+closeButton.Position = UDim2.new(1, -35, 0, 8)
+closeButton.BackgroundTransparency = 1
+closeButton.Text = "✕"
+closeButton.TextColor3 = Color3.fromRGB(235, 50, 80)
+closeButton.TextSize = 16
+closeButton.Font = Enum.Font.GothamBold
+closeButton.Parent = mainFrame
+local TimeLabel = Instance.new("TextLabel")
+TimeLabel.Size = UDim2.new(0, 100, 0, 35)
+TimeLabel.Position = UDim2.new(1, -145, 0, 5)
+TimeLabel.BackgroundTransparency = 1
+TimeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TimeLabel.TextSize = 12
+TimeLabel.Font = Enum.Font.GothamBold
+TimeLabel.TextXAlignment = Enum.TextXAlignment.Right
+TimeLabel.Text = os.date("%I:%M %p")
+TimeLabel.Parent = mainFrame
+-- Sidebar Container
+local NavBar = Instance.new("Frame")
+NavBar.Size = UDim2.new(0, 95, 1, -50)
+NavBar.Position = UDim2.new(0, 10, 0, 40)
+NavBar.BackgroundColor3 = Color3.fromRGB(25, 12, 45)
+NavBar.BorderSizePixel = 0
+NavBar.Parent = mainFrame
+Instance.new("UICorner", NavBar).CornerRadius = UDim.new(0, 6)
+local MM2Page = Instance.new("Frame")
+MM2Page.Size = UDim2.new(1, -125, 1, -50)
+MM2Page.Position = UDim2.new(0, 115, 0, 40)
+MM2Page.BackgroundTransparency = 1
+MM2Page.Visible = true
+MM2Page.Parent = mainFrame
+local CoinPage = Instance.new("Frame")
+CoinPage.Size = UDim2.new(1, -125, 1, -50)
+CoinPage.Position = UDim2.new(0, 115, 0, 40)
+CoinPage.BackgroundTransparency = 1
+CoinPage.Visible = false
+CoinPage.Parent = mainFrame
+-- Tabs
+local MM2TabBtn = Instance.new("TextButton")
+MM2TabBtn.Size = UDim2.new(1, -10, 0, 32)
+MM2TabBtn.Position = UDim2.new(0, 5, 0, 10)
+MM2TabBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 150)
+MM2TabBtn.Text = "MM2"
+MM2TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MM2TabBtn.Font = Enum.Font.GothamBold
+MM2TabBtn.TextSize = 12
+MM2TabBtn.Parent = NavBar
+Instance.new("UICorner", MM2TabBtn).CornerRadius = UDim.new(0, 6)
+local CoinTabBtn = Instance.new("TextButton")
+CoinTabBtn.Size = UDim2.new(1, -10, 0, 32)
+CoinTabBtn.Position = UDim2.new(0, 5, 0, 47)
+CoinTabBtn.BackgroundColor3 = Color3.fromRGB(35, 18, 60)
+CoinTabBtn.Text = "Coin Farm"
+CoinTabBtn.TextColor3 = Color3.fromRGB(210, 180, 255)
+CoinTabBtn.Font = Enum.Font.GothamBold
+CoinTabBtn.TextSize = 12
+CoinTabBtn.Parent = NavBar
+Instance.new("UICorner", CoinTabBtn).CornerRadius = UDim.new(0, 6)
+MM2TabBtn.MouseButton1Click:Connect(function()
+MM2Page.Visible = true; CoinPage.Visible = false
+MM2TabBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 150)
+CoinTabBtn.BackgroundColor3 = Color3.fromRGB(35, 18, 60)
+CoinTabBtn.TextColor3 = Color3.fromRGB(210, 180, 255)
+end)
+CoinTabBtn.MouseButton1Click:Connect(function()
+MM2Page.Visible = false; CoinPage.Visible = true
+CoinTabBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 150)
+MM2TabBtn.BackgroundColor3 = Color3.fromRGB(35, 18, 60)
+MM2TabBtn.TextColor3 = Color3.fromRGB(210, 180, 255)
+end)
+local mm2Scroll = Instance.new("ScrollingFrame")
+mm2Scroll.Size = UDim2.new(1, 0, 1, 0)
+mm2Scroll.BackgroundTransparency = 1
+mm2Scroll.BorderSizePixel = 0
+mm2Scroll.ScrollBarThickness = 2
+mm2Scroll.ScrollBarImageColor3 = Color3.fromRGB(255, 0, 150)
+mm2Scroll.Parent = MM2Page
+local mm2List = Instance.new("UIListLayout")
+mm2List.Padding = UDim.new(0, 4)
+mm2List.SortOrder = Enum.SortOrder.LayoutOrder
+mm2List.Parent = mm2Scroll
+mm2List:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() mm2Scroll.CanvasSize = UDim2.fromOffset(0, mm2List.AbsoluteContentSize.Y + 5) end)
+local coinScroll = Instance.new("ScrollingFrame")
+coinScroll.Size = UDim2.new(1, 0, 1, 0)
+coinScroll.BackgroundTransparency = 1
+coinScroll.BorderSizePixel = 0
+coinScroll.ScrollBarThickness = 2
+coinScroll.ScrollBarImageColor3 = Color3.fromRGB(255, 0, 150)
+coinScroll.Parent = CoinPage
+local coinList = Instance.new("UIListLayout")
+coinList.Padding = UDim.new(0, 4)
+coinList.SortOrder = Enum.SortOrder.LayoutOrder
+coinList.Parent = coinScroll
+coinList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() coinScroll.CanvasSize = UDim2.fromOffset(0, coinList.AbsoluteContentSize.Y + 5) end)
+-- FLOATING AIMLOCK RED WIDGET BUTTON
+local dragAimButton = Instance.new("TextButton")
+dragAimButton.Name = "MM2DraggableAIM"
+dragAimButton.Size = UDim2.new(0, 105, 0, 38)
+dragAimButton.Position = UDim2.new(0.85, 0, 0.35, 0)
+dragAimButton.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
+dragAimButton.Text = "AIMLOCK: OFF"
+dragAimButton.TextColor3 = Color3.new(1, 1, 1)
+dragAimButton.Font = Enum.Font.GothamBold
+dragAimButton.TextSize = 11
+dragAimButton.Visible = false
+dragAimButton.Active = true
+dragAimButton.Draggable = true
+dragAimButton.Parent = ScreenGui
+Instance.new("UICorner", dragAimButton).CornerRadius = UDim.new(0, 6)
+-- FLOATING YELLOW GUN TP WIDGET BUTTON
+local dragTpButton = Instance.new("TextButton")
+dragTpButton.Name = "MM2DraggableTP"
+dragTpButton.Size = UDim2.new(0, 50, 0, 50)
+dragTpButton.Position = UDim2.new(0.85, 0, 0.45, 0)
+dragTpButton.BackgroundColor3 = Color3.fromRGB(255, 210, 0)
+dragTpButton.Text = "GUN"
+dragTpButton.TextColor3 = Color3.new(0, 0, 0)
+dragTpButton.Font = Enum.Font.GothamBold
+dragTpButton.TextSize = 11
+dragTpButton.Visible = false
+dragTpButton.Active = true
+dragTpButton.Draggable = true
+dragTpButton.Parent = ScreenGui
+Instance.new("UICorner", dragTpButton).CornerRadius = UDim.new(0, 25)
+-- Unified interface synchronization matrix map
+local activeUiToggleButtonsMap = {}
+-- UI Factory components
+local function createMenuToggle(labelText, targetGlobalKey, targetParent, callback)
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.new(1, -6, 0, 34)
+btn.BackgroundColor3 = _G[targetGlobalKey] and Color3.fromRGB(40, 150, 80) or Color3.fromRGB(180, 50, 50)
+btn.Text = labelText .. ": " .. (_G[targetGlobalKey] and "ON" or "OFF")
+btn.TextColor3 = Color3.new(1, 1, 1)
+btn.Font = Enum.Font.GothamBold
+btn.TextSize = 11
+btn.Parent = targetParent
+Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+local function syncVisualState()
+btn.Text = labelText .. ": " .. (_G[targetGlobalKey] and "ON" or "OFF")
+btn.BackgroundColor3 = _G[targetGlobalKey] and Color3.fromRGB(40, 150, 80) or Color3.fromRGB(180, 50, 50)
+end
+btn.Activated:Connect(function()
+_G[targetGlobalKey] = not _G[targetGlobalKey]
+syncVisualState()
+if callback then callback(_G[targetGlobalKey]) end
+end)
+activeUiToggleButtonsMap[targetGlobalKey] = syncVisualState
+return btn
+end
+local function createMenuAction(labelText, targetParent, callback)
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.new(1, -6, 0, 34)
+btn.BackgroundColor3 = Color3.fromRGB(50, 25, 75)
+btn.Text = labelText:upper()
+btn.TextColor3 = Color3.new(1, 1, 1)
+btn.Font = Enum.Font.GothamBold
+btn.TextSize = 11
+btn.Parent = targetParent
+Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+btn.Activated:Connect(function() if callback then callback() end end)
+return btn
+end
+local function createMenuSlider(labelText, targetGlobalKey, minV, maxV, defaultV, targetParent, callback)
+local container = Instance.new("Frame")
+container.Size = UDim2.new(1, -6, 0, 48)
+container.BackgroundColor3 = Color3.fromRGB(50, 25, 75)
+container.Parent = targetParent
+Instance.new("UICorner", container).CornerRadius = UDim.new(0, 6)
+local lbl = Instance.new("TextLabel")
+lbl.Size = UDim2.new(1, -20, 0, 20)
+lbl.Position = UDim2.new(0, 10, 0, 2)
+lbl.BackgroundTransparency = 1
+lbl.Text = labelText .. ": " .. tostring(defaultV)
+lbl.TextColor3 = Color3.new(1, 1, 1)
+lbl.Font = Enum.Font.GothamBold
+lbl.TextSize = 11
+lbl.TextXAlignment = Enum.TextXAlignment.Left
+lbl.Parent = container
+local track = Instance.new("TextButton")
+track.Size = UDim2.new(1, -20, 0, 4)
+track.Position = UDim2.new(0, 10, 0, 30)
+track.BackgroundColor3 = Color3.fromRGB(20, 10, 35)
+track.Text = ""
+track.Parent = container
+Instance.new("UICorner", track).CornerRadius = UDim.new(0, 2)
+local knob = Instance.new("Frame")
+knob.Size = UDim2.new(0, 10, 0, 10)
+knob.AnchorPoint = Vector2.new(0.5, 0.5)
+knob.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
+knob.Parent = track
+Instance.new("UICorner", knob).CornerRadius = UDim.new(0, 5)
+local startPercent = (defaultV - minV) / (maxV - minV)
+knob.Position = UDim2.new(startPercent, 0, 0.5, 0)
+local isDragging = false
+local function updateSlider(input)
+local percentage = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+knob.Position = UDim2.new(percentage, 0, 0.5, 0)
+local value = math.floor(minV + (percentage * (maxV - minV)))
+lbl.Text = labelText .. ": " .. tostring(value)
+_G[targetGlobalKey] = value
+if callback then callback(value) end
+end
+track.InputBegan:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then isDragging = true updateSlider(input) end end)
+UserInputService.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then isDragging = false end end)
+UserInputService.InputChanged:Connect(function(input) if isDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then updateSlider(input) end end)
+end
+-- ====================================================================
+-- POPULATING TABS
+-- ====================================================================
+-- --- TAB 1: MM2 PAGES CONTROLS ---
+createMenuSlider("WalkSpeed", "WalkSpeed_Value", 16, 150, 16, mm2Scroll, function(v)
+local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+if hum then hum.WalkSpeed = v end
+end)
+createMenuSlider("FOV Size", "FOV_Radius", 50, 400, 150, mm2Scroll)
+local fovSelectorActionBtn
+fovSelectorActionBtn = createMenuAction("FOV Color: Ice Blue", mm2Scroll, function()
+currentFovColorIndex = currentFovColorIndex + 1
+if currentFovColorIndex > #fovColorList then currentFovColorIndex = 1 end
+CircleStroke.Color = fovColorList[currentFovColorIndex]
+fovSelectorActionBtn.Text = "FOV Color: " .. fovColorNames[currentFovColorIndex]
+end)
+local function handleDynamicAimlockVisualSync(state)
+dragAimButton.Text = state and "AIMLOCK: ON" or "AIMLOCK: OFF"
+dragAimButton.BackgroundColor3 = state and Color3.fromRGB(40, 150, 80) or Color3.fromRGB(180, 50, 50)
+FOVCircleFrame.Visible = state
+if activeUiToggleButtonsMap["Aimlock_Active"] then
+activeUiToggleButtonsMap"Aimlock_Active"
+end
+end
+createMenuToggle("Role ESP", "PlayerESP_Enabled", mm2Scroll, function(state) updateAllESPHighlights() end)
+createMenuToggle("Sheriff Aimlock", "Aimlock_Active", mm2Scroll, handleDynamicAimlockVisualSync)
+createMenuToggle("Draggable Aimlock Button", "AimButton_Draggable", mm2Scroll, function(state) dragAimButton.Visible = state end)
+createMenuToggle("Only Aim While Sheriff", "OnlyAimAsSheriff", mm2Scroll)
+createMenuToggle("Gun Tracking ESP", "GunESP_Enabled", mm2Scroll)
+createMenuAction("Teleport to Dropped Gun", mm2Scroll, function() teleportToGun() end)
+createMenuToggle("Draggable Gun TP Button", "TpButton_Draggable", mm2Scroll, function(state) dragTpButton.Visible = state end)
+-- --- TAB 2: COIN FARM PAGES CONTROLS ---
+createMenuToggle("Coin & Candy Farm", "CoinFarm_Enabled", coinScroll)
+createMenuToggle("Gold Candy ESP", "MM2_ESP_Enabled", coinScroll)
+createMenuToggle("Reset When Bag Full", "ResetWhenFull_Enabled", coinScroll)
+createMenuToggle("Auto-Leave Danger", "AutoLeave_Enabled", coinScroll)
+createMenuSlider("Farm Speed Setting", "CoinFarm_Speed", 15, 100, 24, coinScroll)
+local AutoBuyBtn
+AutoBuyBtn = createMenuAction("Auto Buy Boxes: OFF [Box 1]", coinScroll, function()
+if not _G.AutoBuy_Enabled then _G.AutoBuy_Enabled = true else _G.AutoBuy_Enabled = false end
+AutoBuyBtn.Text = "Auto Buy Boxes: " .. (_G.AutoBuy_Enabled and "ON [Box 1]" or "OFF [Box 1]")
+end)
+createMenuAction("Teleport to Lobby Map", coinScroll, function()
+local lobby = Workspace:FindFirstChild("Lobby") or Workspace:FindFirstChild("LobbyWorkspace")
+local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+if root and lobby then
+local spawnPart = lobby:FindFirstChildWhichIsA("BasePart", true)
+if spawnPart then root.CFrame = spawnPart.CFrame + Vector3.new(0, 3, 0) end
+end
+end)
+-- ====================================================================
+-- FIXED REOPEN TOGGLE SYSTEM
+-- ====================================================================
+local openButton = Instance.new("TextButton")
+openButton.Name = "FANTNAMEHubOpenButton"
+openButton.Size = UDim2.fromOffset(160, 36)
+openButton.AnchorPoint = Vector2.new(0.5, 0)
+openButton.Position = UDim2.new(0.5, 0, 0.02, 0)
+openButton.BackgroundColor3 = Color3.fromRGB(15, 35, 75)
+openButton.Text = "OPEN FANTNAME HUB"
+openButton.TextColor3 = Color3.new(1, 1, 1)
+openButton.Font = Enum.Font.GothamBold
+openButton.TextSize = 11
+openButton.Visible = false
+openButton.Parent = ScreenGui
+Instance.new("UICorner", openButton).CornerRadius = UDim.new(0, 6)
+local openStroke = Instance.new("UIStroke", openButton)
+openStroke.Color = Color3.fromRGB(0, 150, 255)
+openStroke.Thickness = 1.5
+closeButton.Activated:Connect(function()
+mainFrame.Visible = false
+openButton.Visible = true
+end)
+openButton.MouseButton1Click:Connect(function()
+mainFrame.Visible = true
+openButton.Visible = false
+end)
+openButton.TouchTap:Connect(function()
+mainFrame.Visible = true; openButton.Visible = false
+end)
+-- Floating Aimlock Shortcut Click
+local function handleFloatingAimlockShortcutClick()
+_G.Aimlock_Active = not _G.Aimlock_Active
+handleDynamicAimlockVisualSync(_G.Aimlock_Active)
+end
+dragAimButton.MouseButton1Click:Connect(handleFloatingAimlockShortcutClick)
+dragAimButton.TouchTap:Connect(handleFloatingAimlockShortcutClick)
+-- FIXED DRIFT: Bound yellow draggable widget directly to the unified Memory-Locked return handler [INDEX]
+local dragTpInputBeganConn
+dragTpButton.InputBegan:Connect(function(input)
+if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+-- Ensures regular clicks fire the return teleport instantly without drag interference [INDEX]
+local startPos = input.Position
+local conn
+conn = input.Changed:Connect(function()
+if input.UserInputState == Enum.UserInputState.End then
+conn:Disconnect()
+if (input.Position - startPos).Magnitude < 5 then
+teleportToGun()
+end
+end
+end)
+end
+end)
+-- Runtime step loops
+local lastGunInstance = nil
+local notificationTimer = 0
+RunService.RenderStepped:Connect(function(deltaTime)
+local gunDrop = locateGunDrop()
+local char = LocalPlayer.Character
+local localRoot = char and char:FindFirstChild("HumanoidRootPart")
+if gunDrop and localRoot and isCharacterInActiveArena() and not isLocalPlayerSheriff() then
+if gunDrop ~= lastGunInstance then lastGunInstance = gunDrop; notificationTimer = 5.0 end
+if notificationTimer > 0 then
+notificationTimer = notificationTimer - deltaTime
+local distance = math.floor((gunDrop:GetPivot().Position - localRoot.Position).Magnitude)
+notifyText.Text = "GUN DROPPED\n" .. tostring(distance) .. " studs away\nYOU CAN PICK IT UP"
+notifyPanel.Visible = true
+else notifyPanel.Visible = false end
+else lastGunInstance = nil; notificationTimer = 0; notifyPanel.Visible = false end
+if _G.Aimlock_Active then
+FOVCircleFrame.Visible = true
+FOVCircleFrame.Size = UDim2.new(0, _G.FOV_Radius * 2, 0, _G.FOV_Radius * 2)
+if _G.OnlyAimAsSheriff and not isLocalPlayerSheriff() then CircleStroke.Color = fovColorList[currentFovColorIndex] return end
+local targetChar = getMurdererCharacter()
+if targetChar and targetChar:FindFirstChild("HumanoidRootPart") then
+local lockPart = targetChar.HumanoidRootPart
+local screenPoint, onScreen = Camera:WorldToViewportPoint(lockPart.Position)
+if onScreen then
+local distanceToCenter = (Vector2.new(screenPoint.X, screenPoint.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+if distanceToCenter <= _G.FOV_Radius then
+Camera.CFrame = CFrame.new(Camera.CFrame.Position, lockPart.Position + (targetChar.HumanoidRootPart.Velocity * 0.125))
+CircleStroke.Color = Color3.fromRGB(0, 255, 150)
+else CircleStroke.Color = fovColorList[currentFovColorIndex] end
+else CircleStroke.Color = fovColorList[currentFovColorIndex] end
+else CircleStroke.Color = fovColorList[currentFovColorIndex] end
+else FOVCircleFrame.Visible = false end
+end)
+-- Farming background processor loops
+task.spawn(function()
+while true do
+if _G.CoinFarm_Enabled and isCharacterInActiveArena() and not isCoinBagFull() then
+local targetCoin = getClosestCoin()
+local char = LocalPlayer.Character
+local root = char and char:FindFirstChild("HumanoidRootPart")
+local hum = char and char:FindFirstChildOfClass("Humanoid")
+if root and targetCoin and hum then
+hum.PlatformStand = true
+local noclipConnection = RunService.Stepped:Connect(function()
+if _G.CoinFarm_Enabled and char then
+for _, part in ipairs(char:GetDescendants()) do if part:IsA("BasePart") then part.CanCollide = false end end
+end
+end)
+while _G.CoinFarm_Enabled and targetCoin and targetCoin.Parent and not isCoinBagFull() do
+local direction = (targetCoin.Position - root.Position)
+if direction.Magnitude < 2 then root.CFrame = targetCoin.CFrame break end
+root.Velocity = direction.Unit * _G.CoinFarm_Speed
+task.wait()
+end
+noclipConnection:Disconnect()
+root.Velocity = Vector3.new(0,0,0)
+hum.PlatformStand = false
+end
+elseif _G.ResetWhenFull_Enabled and isCoinBagFull() then
+if _G.AutoBuy_Enabled then
+local shopRemote = ReplicatedStorage:FindFirstChild("Shop") or ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Shop")
+if shopRemote and shopRemote:FindFirstChild("BuyItem") then shopRemote.BuyItem:FireServer("MysteryBox1", "Coins") end
+end
+local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+if hum then hum.Health = 0 end
+task.wait(2)
+end
+task.wait(0.01)
+end
+end)
+task.spawn(function()
+while true do
+if _G.AutoGrabGun then
+local gunDrop = locateGunDrop()
+if gunDrop and not isLocalPlayerSheriff() and isCharacterInActiveArena() then teleportToGun() end
+end
+task.wait(0.2)
+end
+end)
